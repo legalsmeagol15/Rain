@@ -1,0 +1,61 @@
+# version 330
+
+//CS 5610 HW 4  TEXTURE MAPPING
+// Wesley Oates
+
+out vec4 color;
+layout (location=0) in vec3 pos;		//In world space
+layout (location=1) in vec3 norm;		//In world space
+layout (location=2) in vec3 tcoords;	//untransformed
+
+uniform mat3 worldTransInv;
+uniform vec3 lightPosition;	//untransformed
+uniform vec3 camPosition;	//untransformed
+uniform vec3 lightColor;
+uniform vec3 ambientLight;
+
+uniform vec3 ambientColor;
+uniform vec3 diffuseColor;
+uniform vec3 specularColor;
+uniform float specularIntensity;
+
+uniform sampler2D ambientTexture;
+uniform sampler2D diffuseTexture;
+uniform sampler2D specularTexture;
+
+void main(){
+	
+	//STEP #1 - read the textures
+	vec2 txtrXY = vec2(tcoords.x, 1-tcoords.y);
+	vec3 ambClr = texture(ambientTexture, txtrXY).rgb;
+	vec3 difClr = texture(diffuseTexture, txtrXY).rgb;
+	vec3 spcClr = texture(specularTexture, txtrXY).rgb;
+
+	//STEP #2 - find the ambient component.
+	ambClr += ambientColor;
+	ambClr *= ambientLight;		
+
+	//STEP #3 - find the diffuse component.
+	vec3 N = normalize(norm);
+	vec3 L = normalize(lightPosition - pos);
+	float theta = dot(L,N);
+	difClr += diffuseColor;
+	difClr *= theta;	
+
+	//STEP #4 - find the specular component.
+	vec3 V = camPosition - pos;
+	V = normalize(V);
+	vec3 H = normalize(L+V);
+	float sf = theta * pow(dot(H,N), specularIntensity);
+	spcClr += specularColor;
+	spcClr *= sf;
+
+
+	//STEP #5 - apply the RGB of the light color, which defines the 
+	//light intensity.
+	vec3 k = ambClr + (lightColor * (difClr + spcClr));
+		
+	//Step #5  - set the color.
+	color = vec4(k.x, k.y, k.z, 1);
+
+}

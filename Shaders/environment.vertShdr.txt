@@ -1,0 +1,19 @@
+#version 330
+
+//ENVIRONMENT VERTEX SHADER
+//Wesley Oates
+
+layout (location=0) in vec3 pos;
+
+
+layout (location=0) out vec3 outTextureCoords;
+
+uniform mat4 worldTrans;
+uniform mat3 sampleTrans;
+uniform mat4 camTrans;
+uniform mat4 objTrans;
+
+void main(){
+	gl_Position = (camTrans * worldTrans * objTrans) * vec4(pos,1);
+	outTextureCoords = sampleTrans * pos;
+}

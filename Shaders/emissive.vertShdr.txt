@@ -1,0 +1,27 @@
+#version 330
+
+//CS 5610 HW 3  VERTEX SHADER
+// Wesley Oates
+
+
+layout (location=0) in vec3 pos;		//In world space
+layout (location=1) in vec3 norms;		//In world space
+layout (location=2) in vec3 textureCoords;
+
+layout (location=0) out vec3 outPosition;
+layout (location=1) out vec3 outNorms;
+layout (location=2) out vec3 outTextureCoords;
+
+uniform mat4 worldTrans;
+uniform mat4 camTrans;
+uniform mat4 objTrans;
+
+void main(){
+	vec4 h_pos = vec4(pos,1);
+	gl_Position = (camTrans * objTrans) * h_pos;
+	//h_pos  = (worldTrans * objTrans) * h_pos;
+	h_pos  = objTrans * h_pos;
+	outPosition = h_pos.xyz / h_pos.w;
+	outNorms = mat3(objTrans) * norms;
+	outTextureCoords = textureCoords;
+}

@@ -1,0 +1,9 @@
+*.zip
+*.docx
+*.pdf
+Debug/
+*.vcxproj
+*.filters
+*.user
+Research/
+*.tmp

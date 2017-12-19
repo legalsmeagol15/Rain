@@ -1,0 +1,112 @@
+# version 330
+
+//CS 5610 HW 4  TEXTURE MAPPING
+// Wesley Oates
+
+
+
+out vec4 color;
+layout (location=0) in vec3 pos;		//In world space
+//layout (location=1) in vec3 norm;		//In OBJECT space
+layout (location=2) in vec3 tcoords;	//untransformed
+
+uniform mat3 worldTransInv;
+uniform vec3 lightPosition;	//untransformed
+uniform vec3 camPosition;	//untransformed
+uniform vec3 lightColor;
+uniform vec3 ambientLight;
+
+//uniform vec3 ambientColor;
+//uniform vec3 diffuseColor;
+uniform vec3 waterColor;
+uniform float waterClarity;
+uniform vec3 specularColor;
+uniform float specularIntensity;
+uniform float refractionIndex;
+//uniform int width;
+//uniform int height;
+uniform float depth;
+const float refractionAir = 1.000293;
+uniform mat4 objTrans;
+
+uniform sampler2D waterSurface;
+uniform sampler2D waterBed;
+uniform samplerCube waterEnvironment;
+
+void main(){
+	
+	mat3 objTransMatrix = mat3(objTrans);
+
+	//STEP #1 - read the water surface.
+	vec2 xy_f = vec2(1-tcoords.x, tcoords.y);
+	vec4 waterFragment = texture(waterSurface, xy_f);
+	vec3 N = normalize(objTransMatrix * (waterFragment.xyz));
+	float height = waterFragment.w;
+
+	//STEP #2 - find the ambient component.
+	vec3 ambClr = ambientLight;		
+
+	//STEP #3 - find the diffuse component.
+	vec3 L = lightPosition - pos;
+	L = normalize(L);
+	float theta = dot(L,N);
+	vec3 difClr = waterColor;
+	difClr *= theta;	
+
+
+	//STEP #3a - Find the reflectance vector.
+	vec3 I = normalize(pos - camPosition);
+	vec3 R = normalize(I - (2*dot(I,N)*N));
+	
+	//Step #3b - find the transmission vector.
+	float nRatio = refractionAir / refractionIndex;
+	float cos_I = dot(-I,  N);
+	float sin2_T = (nRatio * nRatio) * (1 - (cos_I * cos_I));
+	vec3 T = (nRatio * I) + ((nRatio * cos_I - sqrt(1 - sin2_T)) * N);
+
+	//Step #3c - find the weights of reflectance and transmission.  Assume no total internal reflectance
+	float R_weight, T_weight;
+	if (sin2_T <=1){
+		float cos_T = sqrt(1-sin2_T);
+		float R_perpendicular = ((refractionAir * cos_I) - (refractionIndex*cos_T)) / ((refractionAir * cos_I) + (refractionIndex*cos_T));
+		float R_parallel = ((refractionIndex * cos_I) - (refractionAir * cos_T)) / ((refractionIndex * cos_I) + (refractionAir * cos_T));
+		R_weight  = ((R_perpendicular*R_perpendicular) + (R_parallel * R_parallel))/2;
+		R_weight += 0.2 * (1-R_weight);		//Added for aesthetic reasons.
+		T_weight = 1 - R_weight;	
+	}
+	else{
+		R_weight = 1;
+		T_weight = 0;
+	}
+	
+
+	//Step #4a - sample from the deep to get the diffuse color.
+	vec2 sampleOffset = depth * (T.xy / T.z);
+	vec4 bedFragment = texture(waterBed, xy_f + sampleOffset);
+	float bed_weight  = T_weight * pow(waterClarity, depth);
+	float blue_weight = T_weight - bed_weight;
+	difClr  = (bedFragment.rgb * bed_weight) + (waterColor * blue_weight);
+
+	//Step #4b - sample from the environment to get the reflection color.
+	vec3 flip = vec3(R.x, R.y, R.z);
+	difClr += texture(waterEnvironment, flip).rgb * R_weight;
+
+	//STEP #5 - find the specular component.
+	vec3 V = -I;
+	vec3 H = normalize(L+V);
+	float sf = theta * pow(dot(H,N), specularIntensity);
+	vec3 spcClr = specularColor;
+	spcClr *= sf;
+	
+
+	//STEP #6 - apply the RGB of the light color, which defines the 
+	//light intensity.
+	//spcClr  = vec3(0,0,0);
+	ambClr = vec3(0,0,0);
+	vec3 k = ambClr + (lightColor * (difClr + spcClr));
+		
+	//Step #e - set the color.
+	color = vec4(k.x, k.y, k.z, 1);
+
+
+}

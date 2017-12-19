@@ -1,0 +1,14 @@
+# version 330
+
+
+//ENVIRONMENT FRAGMENT SHADER
+//Wesley Oates
+
+layout (location=0) in vec3 texCoords;
+out vec4 color;
+
+uniform samplerCube environmentMap;
+
+void main(){
+	color = texture(environmentMap, texCoords);
+}

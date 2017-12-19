@@ -1,0 +1,21 @@
+# version 330
+
+// EMISSIVE FRAGMENT SHADER.
+// Wesley Oates
+
+out vec4 color;
+layout (location=0) in vec3 pos;	//object position within world.
+layout (location=1) in vec3 norm;	//transformed
+
+uniform vec3 camPosition;	//untransformed
+uniform vec3 emissiveColor;
+uniform float emissiveBrightness;
+
+void main(){
+
+	vec3 toCamera = camPosition - pos;
+	float dot_to_cam = max(0, dot(normalize(toCamera), normalize(norm)));
+	float bright_factor = dot_to_cam * emissiveBrightness;
+	vec3 k = (emissiveColor + vec3(0.1f, 0.1f, 0.1f)) * bright_factor;
+	color = vec4(max(k, emissiveColor),1);
+}

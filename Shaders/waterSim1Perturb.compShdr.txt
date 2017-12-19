@@ -1,0 +1,80 @@
+#version 430 core
+//PERTURBATION COMPUTE SHADER
+//The purpose of this shader is just to add perturbation data to the wave fragment data.  The 
+//buffer will iterate through a list of new perturbations, and write them to an output wave 
+//fragment buffer (which will function as an input for the wave simulation buffer.)
+//
+//Wesley Oates Apr 2017
+
+layout( local_size_x= 8,  local_size_y= 1, local_size_z= 1 ) in;
+
+struct WaveFragment{
+	vec2 origin;
+	float wave_number;
+	float amplitude;
+	int time_start;
+	float phase_offset;
+	float energy;
+	float celerity;
+	vec2 reflection;
+	float traversal;
+	float unused;	
+};
+struct Perturbation {
+	vec2 location;
+	int level;
+	float unused;
+	WaveFragment fragment;
+};
+
+
+layout(std430) buffer;
+layout(binding=3) buffer perturbations{
+	Perturbation perturbs[];
+};
+layout(binding=1) buffer outputs{
+	WaveFragment outs[];
+};
+
+uniform int width;
+uniform int height;
+uniform float gravity;
+uniform float surfaceTension;
+uniform float density;
+uniform float depth;
+uniform float scale;
+
+//Returns the energy at the given wave number and amplitude.
+float GetEnergy(float amplitude, float waveNumber){
+	float pg = density * gravity;
+	float sk2 = surfaceTension * waveNumber * waveNumber;
+	return (pg + sk2) * amplitude * amplitude / 2.0f;
+}
+
+//Returns the celerity at the given wave number.
+float GetCelerity(float waveNumber){
+	float gk = gravity / waveNumber;
+	float spk = surfaceTension * waveNumber / density;
+	float tanh_kd = tanh(waveNumber * depth);
+	return sqrt((gk + spk) * tanh_kd) / scale;
+}
+
+
+//Returns the index for the given x, y, z coordinates.
+int GetIndex(vec2 global_xy, int level){
+	int levelContribution = level * width * height;
+	int rowContribution = int(global_xy.y) * width;
+	return int(global_xy.x) + rowContribution + levelContribution;
+}
+
+
+void main() {	
+	uint idx = gl_GlobalInvocationID.x;
+	Perturbation p = perturbs[idx];
+	int targetIdx = GetIndex(p.location, p.level);
+	p.fragment.energy = GetEnergy(p.fragment.amplitude, p.fragment.wave_number);
+	p.fragment.celerity = GetCelerity(p.fragment.wave_number);
+	outs[targetIdx] = p.fragment;
+}
+
+

@@ -1,0 +1,222 @@
+#version 430 core
+//#extension GL_compute_shader:							enable 
+//#extension GL_shader_storage_buffer_object:			enable
+
+layout( local_size_x= 16,  local_size_y= 16, local_size_z= 1 )   in;
+
+struct WaveFragment{
+	vec2 origin;
+	float wave_number;
+	float amplitude;
+	int time_start;
+	float phase_offset;
+	float energy;
+	float celerity;
+	vec2 reflection;
+	float traversal;
+	float unusedD;
+};
+
+layout(std140) buffer;
+layout(binding=0) buffer inputs{	WaveFragment ins[];		};
+layout(binding=1) buffer outputs{	WaveFragment outs[];		};
+layout(rgba32f, binding=2) uniform image2D normal_map;
+layout(rgba32f, binding=3) readonly uniform image2D reflection_map;
+layout(rgba32f, binding=4) writeonly uniform image2D waves_map;
+
+uniform bool in_A_out_B;
+uniform int width;
+uniform int height;
+uniform int levels;
+
+uniform float gravity;
+uniform float surfaceTension;
+uniform float density;
+uniform float depth;
+uniform float ampTimeEbb;			
+uniform float ampDistanceEbb;		
+uniform float solitonSpeed;	
+uniform float scale;
+uniform int timeNow;	
+uniform int timeElapsed;
+uniform int zLevel;
+
+//Returns the energy at the given wave number and amplitude.
+float GetEnergy(float waveNumber, float amplitude){
+	float pg = density * gravity;
+	float sk2 = surfaceTension * waveNumber * waveNumber;
+	return (pg + sk2) * amplitude * amplitude * 0.5f;
+}
+
+//Returns the celerity at the given wave number.
+float GetCelerity(float waveNumber){
+	float gk = gravity / waveNumber;
+	float spk = surfaceTension * waveNumber / density;
+	float tanh_kd = tanh(waveNumber * depth);
+	return sqrt((gk + spk) * tanh_kd) / scale;
+}
+
+//Returns the index for the given x, y, z coordinates.
+int GetIndex(int x, int y, int level){
+	int levelContribution = level * width * height;
+	int rowContribution = y * width;
+	return x + rowContribution + levelContribution;
+}
+int GetIndex(ivec2 global_xy, int level){
+	return GetIndex(global_xy.x, global_xy.y, level);
+}
+int GetIndex(ivec3 global_xyz) {
+	return GetIndex(global_xyz.x, global_xyz.y, global_xyz.z);
+}
+
+
+float GetAmplitude(float originalAmplitude, float celerity, float traversal, float timePassed, float pTotal){
+	float solitonAmplitude = originalAmplitude * pow(ampTimeEbb, timePassed / celerity);
+	float solitonTraversal = solitonSpeed * pTotal;
+	float distance = abs(solitonTraversal - traversal);
+	if (traversal > solitonTraversal){
+		distance = pTotal * (traversal - solitonTraversal) / (pTotal - solitonTraversal);
+	}
+	return solitonAmplitude * pow(ampDistanceEbb, distance);
+}
+
+float GetSemiManhattan(vec2 straightVector){
+	float abs_x = abs(straightVector.x);
+	float abs_y = abs(straightVector.y);
+	float min_xy = min(abs_x, abs_y);
+	return (min_xy * sqrt(2)) + max(abs_x, abs_y) - min_xy;
+}
+
+
+ vec3 GetNormal(vec2 fromOrigin, float amplitude, float theta){
+	float s = amplitude * sin(theta);
+	float delta_x, delta_y;
+
+
+	if (fromOrigin.x == 0.0f){
+		delta_x = 0.0f;
+		delta_y = abs(s);
+	}
+	else{
+		float ratio = fromOrigin.y / fromOrigin.x;			
+		delta_x = (s*s) / (1.0f + (ratio * ratio)) ;
+		delta_x = sqrt(delta_x);
+		delta_y = abs(delta_x * ratio);
+	}
+
+	//With all the squaring, the signs get rather scrambled.
+	delta_x = delta_x * sign(s) * sign(fromOrigin.x);
+	delta_y = delta_y * sign(s) * sign(fromOrigin.y);
+	float delta_z = 1.0f;
+	vec3 n = normalize(vec3(delta_x, delta_y, delta_z));
+	return n;
+}
+
+
+
+//const ivec2 cardinals_i[4] = ivec2[4](ivec2(1,0), ivec2(0,1), ivec2(-1,0), ivec2(0,-1));
+const ivec2 cardinals_i[8] = ivec2[8](ivec2(1,0), ivec2(1,1), ivec2(0,1), ivec2(-1,1), ivec2(-1,0), ivec2(-1,-1), ivec2(0,-1), ivec2(1,-1));
+const vec2 cardinals_normed[8] = vec2[8](vec2(1,0), vec2(1/sqrt(2), 1/sqrt(2)), vec2(0,1), vec2(-1/sqrt(2),1/sqrt(2)), vec2(-1,0), vec2(-1/sqrt(2), -1/sqrt(2)), vec2(0,-1), vec2(1/sqrt(2)/-1/sqrt(2)));
+
+void main() {
+	
+	//What is the focus fragment that may be overwritten?
+	ivec2 xy_i = ivec2(gl_GlobalInvocationID.xy);
+	vec2 xy_f = vec2(xy_i);
+	WaveFragment inputFragment = ins[GetIndex(xy_i, zLevel)];
+	WaveFragment focus = inputFragment;	
+
+	//Choose the most-energetic nearby fragment from which propogation could occur.
+	int chosenIdx = -1;
+	float chosenEnergy = focus.energy;
+	ivec2 chosenLocation;
+	float chosenDeltaTime;
+	WaveFragment chosen;
+	for (int c = 0; c < 8; c++){
+		ivec2 n_xy_i = xy_i + cardinals_i[c];
+
+		//Is this pixel off the board?
+		if (n_xy_i.x < 0 || n_xy_i.y < 0 || n_xy_i.x == width || n_xy_i.y==height) continue;
+
+		//Is this neighbor less energetic?
+		WaveFragment neighbor = ins[GetIndex(n_xy_i, zLevel)];
+		if (neighbor.energy <= chosenEnergy) continue;
+
+		//Is this focus too far for the neighbor to propogate to anyway?
+		vec2 cardinal_f = vec2(cardinals_i[c]);
+		float deltaTime = float(timeNow - neighbor.time_start) / 1000.0f;
+		float pTotal = neighbor.celerity * deltaTime;
+		vec2 toOrigin = neighbor.origin - xy_f;	
+		if (length(toOrigin) > pTotal) continue;
+
+		//Outside the fragment's range?
+		if (focus.reflection.x != 0 || focus.reflection.y != 0){
+			float d = dot(focus.reflection, cardinals_normed[c]);
+			if (d > 0.0f) continue;
+		}
+
+		//Too far?
+		if (neighbor.traversal > GetSemiManhattan(toOrigin) + 1) continue;
+
+		//After all checks, the neighbor can be a propogation source.
+		chosenIdx = c;
+		chosenEnergy = neighbor.energy;
+		chosenDeltaTime = deltaTime;
+		chosen = neighbor;
+	}
+
+	if (chosenIdx >= 0){
+		focus = chosen;		
+		focus.traversal += length(vec2(cardinals_i[chosenIdx]));
+	}
+	
+	//Figure out if there is any reflection, and look for reflections or damping.
+	vec2 p = xy_f - focus.origin;
+	float pTime = float(timeNow - focus.time_start) / 1000.0f;
+	float pDistance = length(p);	
+	float pTotal = focus.celerity * pTime;
+	
+	vec4 reflection = imageLoad(reflection_map, xy_i);	
+	focus.amplitude *= reflection.z;		//reflection.z is damping multiplier.
+	float fragAmplitude = GetAmplitude(focus.amplitude, focus.celerity, pDistance, pTime, pTotal);
+	focus.energy = GetEnergy(fragAmplitude, focus.wave_number);
+	if (reflection.r != 0 || reflection.g != 0){
+		vec2 N = reflection.rg;
+		vec2 I = normalize(p);
+		float d = dot(I, N);
+		if (d < 0){
+			vec2 R = I - ((2 * d)*N);
+			R = normalize(R);
+			focus.origin = xy_f - (R * length(p));
+			focus.traversal = length(p);
+		}
+	}
+
+	//Store the changes to the data.
+	outs[GetIndex(xy_i, zLevel)] = focus;
+
+	//Figure out the wave characteristics to write the normal map.
+	//NOTE:  if the z-levels were not run serially, atomic writes could safely add up the respective heights.
+	float timeOffset = float(timeNow) / 1000.0f;
+	vec4 pixel = vec4(0,0,0,0);
+	if (fragAmplitude > 0.0f){
+		float theta = (-timeOffset + pDistance + focus.phase_offset);
+		float height = fragAmplitude * -cos(theta);
+		vec3 n = GetNormal(p, fragAmplitude, theta);
+		pixel = vec4(n.x,n.y,n.z, height);
+	}
+	else{
+		pixel = vec4(0,0,1,0);	//Still water.
+	}
+	if (zLevel >  0) {	
+		pixel = pixel + imageLoad(normal_map, xy_i);
+	}
+	imageStore(normal_map, xy_i, pixel);		//Note that the normal will be non-normalized.
+
+	//Write the dev maps.
+	WaveFragment result = outs[GetIndex(xy_i.x, xy_i.y, zLevel)];
+	pixel = vec4(fragAmplitude, fragAmplitude * result.celerity / 12.0f, 0, 1);		
+	if (zLevel < 4) {imageStore(waves_map, xy_i, pixel);}	
+}
+
+
